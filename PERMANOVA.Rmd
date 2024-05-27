@@ -1,0 +1,413 @@
+Permanova
+```{r}
+library(MetBrewer) 
+library(vegan)
+library(ggplot2)
+library(grid)
+library(doSNOW)
+library(dplyr)
+library(cowplot)
+library(e1071)
+```
+
+```{r}
+#=======================================================================================
+# Author:      s.prastnielsen@gmail.com
+# Date:        2023-02-22
+# Using adonis function for PERMANOVA analysis of patient metadatas influence on the dataset
+#=======================================================================================
+getwd()
+samples=read.csv("samples.csv")
+samples$snr=paste0('Kolbi', samples$snr)
+A=as.character(samples$snr)
+olink2=read.csv("data.csv", sep=";", dec=",",row.names = 1)
+rownames(olink2) = paste0('Kolbi', rownames(olink2))
+olink1=olink2[-c(93:96)] #remove columns with comments
+
+meta1 <- read.csv2(file="metadata.csv", header=T, row.names = 1, sep=",")
+rownames(meta1) = paste0('Kolbi', rownames(meta1))
+
+data2=olink1[A,]
+
+group0=read.csv(file="Extra_metadata_merge_20220331.csv",header=T, row.names = 1)
+group1=subset(group0, group0$IBDvsCC3ABcohort==1)
+rownames(group1) = paste0('Kolbi', rownames(group1))
+
+nut1=read.csv(file="nutrition_alco_20220222.csv",header=TRUE,row.names = 1)
+colnames(nut1)
+rownames(nut1) = paste0('Kolbi', rownames(nut1))
+
+meta=meta1[rownames(data2),]
+group=group1[rownames(data2),]
+nut=nut1[rownames(data2),]
+meta$Clean.colon
+group$CC
+all_meta=cbind(group,meta,nut)
+all_meta$CC
+all_meta$Clean.colon
+data=data2 #already normalized by Olink
+```
+
+```{r}
+all_meta$subgroup=gsub(all_meta$subgroup, pattern="1", replace="CD remission")
+all_meta$subgroup=gsub(all_meta$subgroup, pattern="2", replace="CD active")
+all_meta$subgroup=gsub(all_meta$subgroup, pattern="5", replace="clean colon")
+all_meta$subgroup <- as.factor(all_meta$subgroup)
+str(all_meta$subgroup)
+Diagnosis<-complete.cases(all_meta$subgroup)
+
+#rename(all_meta, Age=Age.at.colonoscopy..y.)
+str(all_meta$Age.at.colonoscopy..y.) #is numeric. Good.
+Age<-complete.cases(all_meta$Age.at.colonoscopy..y.)
+
+all_meta$Gender=gsub(all_meta$Gender, pattern = "1", replacement = "F")
+all_meta$Gender=gsub(all_meta$Gender, pattern = "0", replacement = "M")
+all_meta$Gender<- as.factor(all_meta$Gender)
+str(all_meta$Gender)
+Gender<-complete.cases(all_meta$Gender)
+
+all_meta$alcoglass #drinking, how much
+str(all_meta$alcoglass)
+all_meta$alcoglass= as.numeric(all_meta$alcoglass) #contains some NAs
+Alcohol<- complete.cases(all_meta$alcoglass)
+
+all_meta$Clean.colon=gsub(all_meta$Clean.colon, pattern = "1", replacement = "yes")
+all_meta$Clean.colon=gsub(all_meta$Clean.colon, pattern = "0", replacement = "no")
+all_meta$Clean.colon<- as.factor(all_meta$Clean.colon)
+str(all_meta$Clean.colon)
+Clean<-complete.cases(all_meta$Clean.colon)
+
+all_meta$Appendectomy=gsub(all_meta$Appendectomy, pattern = "1", replacement = "yes")
+all_meta$Appendectomy=gsub(all_meta$Appendectomy, pattern = "0", replacement = "no")
+all_meta$Appendectomy<- as.factor(all_meta$Appendectomy)
+str(all_meta$Appendectomy)
+Appendectomy<-complete.cases(all_meta$Appendectomy)
+
+str(all_meta$date.for.datacollection)
+all_meta$date.for.datacollection=as.Date(as.character(all_meta$date.for.datacollection), format='%y%m%d')
+str(all_meta$date.for.datacollection)
+Date<-complete.cases(all_meta$date.for.datacollection)
+
+str(all_meta$SUMMA.PHQ.9)
+all_meta$SUMMA.PHQ.9<-as.numeric(all_meta$SUMMA.PHQ.9)
+PHQ<-complete.cases(all_meta$SUMMA.PHQ.9)
+
+str(all_meta$summa.GAD.7)
+all_meta$summa.GAD.7<-as.numeric(all_meta$summa.GAD.7)
+GAD<-complete.cases(all_meta$summa.GAD.7)
+
+str(all_meta$SUMMA.PSS.4)
+all_meta$SUMMA.PSS.4<-as.numeric(all_meta$SUMMA.PSS.4)
+PSS<-complete.cases(all_meta$SUMMA.PSS.4)
+
+str(all_meta$antal.cigg.i.år)
+all_meta$antal.cigg.i.år<-as.numeric(all_meta$antal.cigg.i.år)
+all_meta$antal.cigg.i.år=gsub(all_meta$antal.cigg.i.år, pattern="-9", replacement = "0") #value is an error. this person had stopped smoking
+all_meta$antal.cigg.i.år[is.na(all_meta$antal.cigg.i.år)]<-0
+all_meta$antal.cigg.i.år<-as.numeric(all_meta$antal.cigg.i.år)
+str(all_meta$antal.cigg.i.år)
+Cigg<-complete.cases(all_meta$antal.cigg.i.år)
+
+str(all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd.)
+#there were a few individuals with a 9 on a scale 1-5. Should be removed(replaced with NA) also those that had a "."
+all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd.[all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd. == "."] <- NA
+all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd.[all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd. == 9] <- NA
+all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd.<-as.numeric(all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd.)
+Health <- complete.cases(all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd.)
+str(all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd.)
+mean(all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd.,na.rm=T) #2.25
+all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd. <- factor(all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd., order = TRUE, levels = c("1", "2", "3", "4", "5"))
+str(all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd.)
+
+str(all_meta$bristolgroup)
+all_meta$bristolgroup=as.factor(all_meta$bristolgroup)
+mean(all_meta$bristolgroup)
+Bristol <- complete.cases(all_meta$bristolgroup)
+
+all_meta$BMI<-as.numeric(all_meta$BMI)
+str(all_meta$BMI)
+BMI <- complete.cases(all_meta$BMI)
+
+str(all_meta$edulevel)
+all_meta$edulevel=as.factor(all_meta$edulevel)
+Education <- complete.cases(all_meta$edulevel)
+
+str(all_meta$biologiskbeh)
+all_meta$biologiskbeh=as.factor(all_meta$biologiskbeh)
+Biol<-complete.cases(all_meta$biologiskbeh)
+
+str(all_meta$immunmodularande)
+all_meta$immunmodularande=as.factor(all_meta$immunmodularande)
+Immu<-complete.cases(all_meta$immunmodularande)
+
+str(all_meta$corticosteroider)
+all_meta$corticosteroider=as.factor(all_meta$corticosteroider)
+Steroids<-complete.cases(all_meta$corticosteroider)
+
+str(all_meta$aminosalisylater)
+all_meta$aminosalisylater=as.factor(all_meta$aminosalisylater)
+ASS<-complete.cases(all_meta$aminosalisylater)
+
+str(all_meta$PPI)
+all_meta$biologiskbeh=as.factor(all_meta$PPI)
+PPI<-complete.cases(all_meta$PPI)
+
+all_meta$medscore = as.numeric(all_meta$medscore) #Correct
+MEDSCORE<- complete.cases(all_meta$medscore)
+all_meta$aei = as.numeric(all_meta$aei) #Correct
+AEI <- complete.cases(all_meta$aei)
+
+all_meta$Years.of.IBD.diagnosis <- as.numeric(all_meta$Years.of.IBD.diagnosis) #Correct
+Years_of_IBD<- complete.cases(all_meta$Years.of.IBD.diagnosis)
+#Look at HB:
+all_meta$Hb <- as.numeric(all_meta$Hb) #Correct 
+Hb <- complete.cases(all_meta$Hb)
+
+#Look at CRP: 
+all_meta$CRP <- as.numeric(all_meta$CRP) #Correct 
+CRP<- complete.cases(all_meta$CRP)
+
+all_meta$Husdjur = as.factor(all_meta$Husdjur)
+all_meta$Husdjur[all_meta$Husdjur == "."] <- NA 
+Pets <- complete.cases(all_meta$Husdjur)
+
+#Look at country of birth: 
+all_meta$Födelseland = as.factor(all_meta$Födelseland)
+all_meta$Födelseland[all_meta$Födelseland == "."] <- NA 
+Country_of_birth <- complete.cases(all_meta$Födelseland)
+
+#look at Childhood environment 
+all_meta$uppväxtsmiljö = as.factor(all_meta$uppväxtsmiljö)
+all_meta$uppväxtsmiljö[all_meta$uppväxtsmiljö == "."] <- NA 
+Childhood_env <- complete.cases(all_meta$uppväxtsmiljö)
+
+#Look into ASA 
+all_meta$ASA = as.factor(all_meta$ASA)
+all_meta$ASA[all_meta$ASA == "."] <- NA 
+ASA <- complete.cases(all_meta$ASA)
+
+str(all_meta)
+```
+
+```{r}
+cl <- makeCluster(7, type = "SOCK")
+registerDoSNOW(cl)
+all.mds <- metaMDS(data)
+stopCluster(cl)
+data.scores <- as.data.frame(scores(all.mds))  
+
+data.scores$Subgroup <- all_meta$subgroup
+data.scores$Age <- all_meta$Age
+data.scores$Gender <- all_meta$Gender 
+data.scores$BMI <- all_meta$BMI 
+data.scores$Alkohol <- all_meta$Alkohol 
+data.scores$clean.colon <- all_meta$Clean.colon 
+data.scores$Cigarettes <- all_meta$antal.cigg.i.år
+data.scores$Health <- all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd.
+data.scores$Bristol <- all_meta$bristolgroup
+data.scores$Appendectomy <- all_meta$Appendectomy
+data.scores$Date <- all_meta$date.for.datacollection
+data.scores$Depression <- all_meta$SUMMA.PHQ.9
+data.scores$Anxiety <- all_meta$summa.GAD.7
+data.scores$Stress <- all_meta$SUMMA.PSS.4
+data.scores$Education <- all_meta$edulevel
+data.scores$Bio <- all_meta$biologiskbeh
+```
+
+```{r}
+getwd()
+
+mycol=met.brewer("NewKingdom")
+
+pdf("230222metaMDS_log10_diagnosis.pdf", width = 7, height = 5) 
+p=ggplot(data=data.scores)+ 
+  stat_ellipse(aes(x=NMDS1,y=NMDS2,colour=Subgroup),level = 0.5) +
+  geom_point(aes(x=NMDS1,y=NMDS2,colour=Subgroup),size=2)+theme_classic()
+p
+dev.off()
+
+pdf("230222metaMDS_log10_age.pdf", width = 7, height = 5) 
+p1=ggplot(data=data.scores)+ 
+  geom_point(aes(x=NMDS1,y=NMDS2,colour=Age),size=2)+theme_classic()
+p1
+dev.off()
+
+pdf("230222metaMDS_log10_gender.pdf", width = 7, height = 5) 
+p2=ggplot(data=data.scores)+ 
+  stat_ellipse(aes(x=NMDS1,y=NMDS2,colour=Gender),level = 0.5) +
+  geom_point(aes(x=NMDS1,y=NMDS2,colour=Gender),size=2)+theme_classic()
+p2+scale_color_manual(values=mycol)
+dev.off()
+
+pdf("230222metaMDS_log10_BMI.pdf", width = 7, height = 5) 
+p3=ggplot(data=data.scores)+ 
+  geom_point(aes(x=NMDS1,y=NMDS2,colour=BMI),size=2)+theme_classic()
+p3
+dev.off()
+
+pdf("230222metaMDS_log10_bristol_factor.pdf", width = 7, height = 5) 
+p4=ggplot(data=data.scores)+ 
+  stat_ellipse(aes(x=NMDS1,y=NMDS2,colour=Bristol),level = 0.5) +
+  geom_point(aes(x=NMDS1,y=NMDS2,colour=Bristol),size=2)+theme_classic()
+p4
+dev.off()
+
+pdf("230222metaMDS_log10_cig.pdf", width = 7, height = 5) 
+p5=ggplot(data=data.scores)+ 
+  geom_point(aes(x=NMDS1,y=NMDS2,colour=Cigarettes),size=2)+theme_classic()
+p5
+dev.off()
+
+pdf("230222metaMDS_log10_health_ordingal.pdf", width = 10, height = 5) 
+p6=ggplot(data=data.scores)+ 
+  stat_ellipse(aes(x=NMDS1,y=NMDS2,colour=Health),level = 0.5) +
+  geom_point(aes(x=NMDS1,y=NMDS2,colour=Health),size=2)+theme_classic()
+p6
+dev.off()
+pdf("230222metaMDS_log10_all.pdf", width=20, height=14)
+plot_grid(p1, p2, p3, p4)
+dev.off()
+```
+
+```{r}
+adon.results_diag_log10<-adonis(data[Diagnosis,] ~ all_meta$subgroup, data[Diagnosis,], method="euclidean",perm=99999)
+adon.results_age_log10<-adonis(data[Age,] ~ all_meta$Age, data[Age,],method="euclidean",perm=99999)
+adon.results_appendectomy_log10<-adonis(data[Appendectomy,] ~ all_meta$Appendectomy, data[Appendectomy,], method="euclidean",perm=99999)
+adon.results_BMI_log10<-adonis(data[BMI,] ~ all_meta$BMI, data[BMI,], method="euclidean",perm=99999)
+adon.results_alk_log10<-adonis(data[Alcohol,]  ~ all_meta$alcoglass, data[Alcohol,], method="euclidean",perm=99999)
+adon.results_gender_log10<-adonis(data[Gender,] ~ all_meta$Gender, data[Gender,], method="euclidean",perm=99999)
+adon.results_clean_colon_log10<-adonis(data[Clean,] ~ all_meta$Clean.colon,data[Clean,], method="euclidean",perm=99999)
+adon.results_cig_log10<-adonis(data[Cigg,] ~ all_meta$antal.cigg.i.år,data[Cigg,], method="euclidean",perm=99999)
+adon.results_health_log10<-adonis(data[Health,] ~ all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd., data[Health,], method="euclidean",perm=99999)
+adon.results_bristol_log10<-adonis(data[Bristol,] ~ all_meta$bristolgroup, data[Bristol,], method="euclidean",perm=99999)
+adon.results_date_log10<-adonis(data[Date,] ~ all_meta$date.for.datacollection,data[Date,], method="euclidean",perm=99999)
+adon.results_depression_log10<-adonis(data[PHQ,] ~ all_meta$SUMMA.PHQ.9,data[PHQ,], method="euclidean",perm=99999)
+adon.results_anxiety_log10<-adonis(data[GAD,] ~ all_meta$summa.GAD.7,data[GAD,], method="euclidean",perm=99999)
+adon.results_stress_log10<-adonis(data[PSS,] ~ all_meta$SUMMA.PSS.4, data[PSS,], method="euclidean",perm=99999)
+adon.results_education_log10<-adonis(data[Education,] ~ all_meta$edulevel,data[Education,], method="euclidean",perm=99999)
+adon.results_bio_log10<-adonis(data[Biol,] ~ all_meta$biologiskbeh, data[Biol,] , method="euclidean",perm=99999)
+adon.results_ASS_log10<-adonis(data[ASS,] ~ all_meta$aminosalisylater, data[ASS,], method="euclidean",perm=99999)
+adon.results_steroids_log10<-adonis(data[Steroids,] ~ all_meta$corticosteroider, data[Steroids,], method="euclidean",perm=99999)
+adon.results_immuno_log10<-adonis(data[Immu,] ~ all_meta$immunmodularande, data[Immu,], method="euclidean",perm=99999)
+adon.results_PPI_log10<-adonis(data[PPI,] ~ all_meta$PPI, data[PPI,], method="euclidean",perm=99999)
+adon.results_ASA_log10<-adonis(data[ASA,] ~ all_meta$ASA,data[ASA,], method="euclidean",perm=99999)
+adon.results_Childhood_env_log10<-adonis(data[Childhood_env,] ~ all_meta$uppväxtsmiljö,data[Childhood_env,], method="euclidean",perm=99999)
+adon.results_Country_of_birth_log10<-adonis(data[Country_of_birth,] ~ all_meta$Födelseland,data[Country_of_birth,], method="euclidean",perm=99999)
+adon.results_Hb_log10<-adonis(data[Hb,] ~ all_meta$Hb,data[Hb,], method="euclidean",perm=99999)
+adon.results_CRP_log10<-adonis(data[CRP,] ~ all_meta$CRP,data[CRP,], method="euclidean",perm=99999)
+adon.results_Pets_log10<-adonis(data[Pets,] ~ all_meta$Husdjur,data[Pets,], method="euclidean",perm=99999)
+adon.results_Years_of_IBD_log10<-adonis(data[Years_of_IBD,] ~ all_meta$Years.of.IBD.diagnosis,data[Years_of_IBD,], method="euclidean",perm=99999)
+adon.results_AEI_log10<-adonis(data[AEI,] ~ all_meta$aei,data[AEI,], method="euclidean",perm=99999)
+adon.results_medscore_log10<-adonis(data[MEDSCORE,] ~ all_meta$medscore,data[MEDSCORE,], method="euclidean",perm=99999)
+```
+
+```{r}
+R_ASA=adon.results_ASA_log10$aov.tab$R2[1]
+R_Childhood_env=adon.results_Childhood_env_log10$aov.tab$R2[1]
+R_Country_of_birth=adon.results_Country_of_birth_log10$aov.tab$R2[1]
+R_Hb=adon.results_Hb_log10$aov.tab$R2[1]
+R_Pets=adon.results_Pets_log10$aov.tab$R2[1]
+R_Years_of_IBD=adon.results_Years_of_IBD_log10$aov.tab$R2[1]
+R_AEI=adon.results_AEI_log10$aov.tab$R2[1]
+R_Medscore=adon.results_medscore_log10$aov.tab$R2[1]
+R_Diagnosis=adon.results_diag_log10$aov.tab$R2[1]
+R_Gender=adon.results_gender_log10$aov.tab$R2[1]
+R_Appendectomy=adon.results_appendectomy_log10$aov.tab$R2[1]
+R_BMI=adon.results_BMI_log10$aov.tab$R2[1]
+R_Alcohol=adon.results_alk_log10$aov.tab$R2[1]
+R_Clean=adon.results_clean_colon_log10$aov.tab$R2[1]
+R_Bristol=adon.results_bristol_log10$aov.tab$R2[1]
+R_Health=adon.results_health_log10$aov.tab$R2[1]
+R_Smoking=adon.results_cig_log10$aov.tab$R2[1]
+R_Date=adon.results_date_log10$aov.tab$R2[1]
+R_Depression=adon.results_depression_log10$aov.tab$R2[1]
+R_Anxiety=adon.results_anxiety_log10$aov.tab$R2[1]
+R_Stress=adon.results_stress_log10$aov.tab$R2[1]
+R_Age=adon.results_age_log10$aov.tab$R2[1]
+R_Education=adon.results_education_log10$aov.tab$R2[1]
+R_Bio=adon.results_bio_log10$aov.tab$R2[1]
+R_Corticosteroids=adon.results_steroids_log10$aov.tab$R2[1]
+R_Aminosalicylates=adon.results_ASS_log10$aov.tab$R2[1]
+R_Immu=adon.results_immuno_log10$aov.tab$R2[1]
+R_PPI=adon.results_PPI_log10$aov.tab$R2[1]
+R_CRP=adon.results_CRP_log10$aov.tab$R2[1]
+R2=cbind(R_AEI, R_Age, R_Alcohol, R_Aminosalicylates, R_Anxiety, R_Appendectomy, R_ASA, R_Bio, R_CRP, R_BMI, R_Bristol, R_Childhood_env, R_Clean, R_Corticosteroids, R_Country_of_birth, R_Date, R_Depression, R_Diagnosis, R_Education, R_Gender, R_Hb, R_Health,R_Immu, R_Medscore, R_Pets, R_PPI, R_Smoking, R_Stress, R_Years_of_IBD)
+write.table(file="230222R2values.tsv", R2)
+
+p_ASA=adon.results_ASA_log10$aov.tab$`Pr(>F)`[1]
+p_Childhood_env=adon.results_Childhood_env_log10$aov.tab$`Pr(>F)`[1]
+p_Country_of_birth=adon.results_Country_of_birth_log10$aov.tab$`Pr(>F)`[1]
+p_Hb=adon.results_Hb_log10$aov.tab$`Pr(>F)`[1]
+p_Pets=adon.results_Pets_log10$aov.tab$`Pr(>F)`[1]
+p_Years_of_IBD=adon.results_Years_of_IBD_log10$aov.tab$`Pr(>F)`[1]
+p_AEI=adon.results_AEI_log10$aov.tab$`Pr(>F)`[1]
+p_Medscore=adon.results_medscore_log10$aov.tab$`Pr(>F)`[1]
+p_Diagnosis=adon.results_diag_log10$aov.tab$`Pr(>F)`[1]
+p_Gender=adon.results_gender_log10$aov.tab$`Pr(>F)`[1]
+p_Appendectomy=adon.results_appendectomy_log10$aov.tab$`Pr(>F)`[1]
+p_BMI=adon.results_BMI_log10$aov.tab$`Pr(>F)`[1]
+p_Alcohol=adon.results_alk_log10$aov.tab$`Pr(>F)`[1]
+p_Clean=adon.results_clean_colon_log10$aov.tab$`Pr(>F)`[1]
+p_Bristol=adon.results_bristol_log10$aov.tab$`Pr(>F)`[1]
+p_Health=adon.results_health_log10$aov.tab$`Pr(>F)`[1]
+p_Smoking=adon.results_cig_log10$aov.tab$`Pr(>F)`[1]
+p_Date=adon.results_date_log10$aov.tab$`Pr(>F)`[1]
+p_Depression=adon.results_depression_log10$aov.tab$`Pr(>F)`[1]
+p_Anxiety=adon.results_anxiety_log10$aov.tab$`Pr(>F)`[1]
+p_Stress=adon.results_stress_log10$aov.tab$`Pr(>F)`[1]
+p_Age=adon.results_age_log10$aov.tab$`Pr(>F)`[1]
+p_PPI=adon.results_PPI_log10$aov.tab$`Pr(>F)`[1]
+p_Bio=adon.results_bio_log10$aov.tab$`Pr(>F)`[1]
+p_Immu=adon.results_immuno_log10$aov.tab$`Pr(>F)`[1]
+p_Corticosteroids=adon.results_steroids_log10$aov.tab$`Pr(>F)`[1]
+p_Aminosalicylates=adon.results_ASS_log10$aov.tab$`Pr(>F)`[1]
+p_Education=adon.results_education_log10$aov.tab$`Pr(>F)`[1]
+p_CRP=adon.results_CRP_log10$aov.tab$`Pr(>F)`[1]
+pvalues=cbind(p_AEI, p_Age, p_Alcohol, p_Aminosalicylates, p_Anxiety, p_Appendectomy, p_ASA, p_Bio, p_CRP, p_BMI, p_Bristol, p_Childhood_env, p_Clean, p_Corticosteroids, p_Country_of_birth, p_Date, p_Depression, p_Diagnosis, p_Education, p_Gender, p_Hb, p_Health,p_Immu, p_Medscore, p_Pets, p_PPI, p_Smoking, p_Stress, p_Years_of_IBD)
+FDR=p.adjust(pvalues, method="fdr")
+FDR
+write.table(file="230222pvalues.tsv", pvalues)
+colnames(pvalues)
+colnames(R2)
+p_FDR=rbind(pvalues, FDR)
+p_FDR_R2=rbind(pvalues, FDR,R2)
+rownames(p_FDR_R2)<-c("p", "FDR","R2")
+colnames(p_FDR_R2)=gsub(colnames(p_FDR_R2), pattern="p_", replace="")
+results=t(p_FDR_R2)
+results=data.frame(results)
+results$Features = rownames(results)
+results$Features[8]<-("Biologicals")
+results$Features[12]<-("Childhood environment")
+results$Features[13]<-("Clean colon")
+results$Features[15]<-("Country of birth")
+results$Features[16]<-("Date of sample collection")
+results$Features[22]<-("Self-rated health")
+results$Features[23]<-("Immunomodulators")
+results$Features[29]<-("Years of IBD")
+
+results$Signif <- ifelse(results$FDR < 0.1,1,0)
+write.table(file="230222adonis_results_health_ordinal_FDR0.1Signif.tsv", results)
+```
+
+```{r}
+getwd()
+results=read.delim("230222adonis_results_health_ordinal_FDR0.1Signif.tsv", sep="", row.names = 1)
+pdf(file="230223_olink_adonis_CC_CD_n128_log10euclidean_dist_perm_99999.pdf", width = 10, height = 10) 
+ggplot(results, aes(x=R2,y=reorder(Features,R2))) +geom_bar(stat = "identity",aes(fill=Signif)) + ggtitle("Permanova analysis of olink profile CD/CC cohort \nEuclidean distance permutations: 99,999, date: 230222\nSignificant if FDR < 0.1") +ylab("Feature") + xlab("R2") + theme(axis.text = element_text(size = 20)) + theme(axis.title = element_text(size = 20))
+dev.off()
+```
+
+```{r}
+pdf(file="230222_subgroup_distributions.pdf", width = 9, height = 6) 
+plot_grid(
+plot(all_meta$Age~as.factor(all_meta$subgroup), all_meta),
+plot(all_meta$bristolgroup~as.factor(all_meta$subgroup), all_meta),
+plot(as.factor(all_meta$Hur.skattar.du.ditt.allmänna.hälsotillstånd.)~as.factor(all_meta$subgroup), all_meta),
+plot(all_meta$edulevel~as.factor(all_meta$subgroup), all_meta),
+plot(all_meta$SUMMA.PSS.4~as.factor(all_meta$subgroup), all_meta),
+plot(as.factor(all_meta$Alkohol)~as.factor(all_meta$subgroup), all_meta),
+plot(all_meta$BMI~as.factor(all_meta$subgroup), all_meta),
+plot(all_meta$SUMMA.PHQ.9~as.factor(all_meta$subgroup), all_meta),
+plot(all_meta$Gender~as.factor(all_meta$subgroup), all_meta), nrow=1)
+dev.off()
+```

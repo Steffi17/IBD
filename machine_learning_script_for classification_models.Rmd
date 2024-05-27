@@ -1,0 +1,294 @@
+
+```{r}
+#=======================================================================================
+# Author:      s.prastnielsen@gmail.com
+# Date:        2023-04-11
+# Seven different ML algorithms with data split, grid search and cross-validation
+#=======================================================================================
+library(caret)
+library(xgboost, Ckmeans.1d.dp)
+library(dplyr)
+library(stringi)
+library(arsenal)
+library(matrixStats)
+library(e1071)
+library(Cubist)
+library(glmnet)
+library(kernlab)
+library(nnet)
+library(cowplot)
+library(parallel)
+print(detectCores())
+sessionInfo()
+#=================================================================
+# Load Data
+#=================================================================
+```
+```{r}
+getwd()
+samples=read.csv("samples.csv")
+samples$snr=paste0('Kolbi', samples$snr)
+A=as.character(samples$snr)
+olink2=read.csv("data.csv", sep=";", dec=",",row.names = 1)
+rownames(olink2) = paste0('Kolbi', rownames(olink2))
+olink1=olink2[-c(93:96)] #remove columns with comments
+
+meta1 <- read.csv2(file="metadata.csv", header=T, row.names = 1, sep=",")
+
+rownames(meta1) = paste0('Kolbi', rownames(meta1))
+rownames(meta1) 
+A
+olink=olink1[A,]
+meta=meta1[A,]
+dataset=prep.autoscale(olink, center = TRUE, scale = TRUE, max.cov = 1)
+boxplot(dataset)
+meta$subgroup
+# I want to compare CD to CC, so I need to change 5 to CC and 1 and 2 to CD in the subgroup column
+meta$subgroup=as.character(meta$subgroup)
+meta$subgroup=gsub(meta$subgroup, replacement = "1", pattern="1")
+meta$subgroup=gsub(meta$subgroup, replacement = "1", pattern="2")
+meta$subgroup=gsub(meta$subgroup, replacement = "0", pattern="5")
+data=cbind(as.numeric(meta$subgroup),dataset)
+colSums(dataset)
+colnames(data)[1]="subgroup"
+
+colSums(data)
+dim(data)
+data[,1] = factor(data[,1], levels=c("0", "1"), labels=c(0,1))
+train = data
+colSums(data)[1]
+```
+
+```{r}
+#=================================================================
+# Split Data
+#=================================================================
+
+# Use caret to create a 70/30% split of the training data (p = 0.7),
+# keeping the proportions of the Diagnosis label the
+set.seed(54321)
+indexes <- createDataPartition(train[,1],
+                               times = 1,
+                               p = 0.7,
+                               list = FALSE)
+TP.train <- train[indexes,]
+TP.test <- train[-indexes,]
+
+# Examine the proportions of the TP label across
+# the datasets to see if the train and test sets are still 
+#representative for TP rate
+prop.table(table(train[,1]))
+prop.table(table(TP.train[,1])) #n=90
+prop.table(table(TP.train[,1])) #n=38
+rownames(train)
+rownames(TP.test)
+```
+
+```{r}
+#=================================================================
+# Train Model
+#=================================================================
+# Set up caret to perform leave-one-out cross validation (performed best) 
+# use a grid search to find optimal model hyperparamter values.
+train.control <- trainControl(method = "loocv",
+                              search = "grid") #could also try "random"
+```
+
+```{r}
+getwd()
+library(doParallel)
+cl <- makePSOCKcluster(7)
+registerDoParallel(cl)
+
+#=================================================================
+# 1. svmRadial
+#=================================================================
+svmMod <- train(as.factor(subgroup) ~ ., 
+                  data = TP.train,
+                  method = "svmRadial",
+                  tuneLength = 18,
+                  trControl = train.control)
+saveRDS(svmMod, "loo_svmMod_auto.rds")
+#=================================================================
+# 2. Elastic Net
+#=================================================================
+enetMod <- train(as.factor(subgroup) ~ ., 
+                  data = TP.train,
+                  method = "glmnet",
+                  tuneLength = 18,
+                  trControl = train.control)
+saveRDS(enetMod, "loo_enetMod_auto.rds")
+#=================================================================
+# 3. Random Forest (ranger)
+#=================================================================
+rangerMod <-train(as.factor(subgroup) ~ ., 
+                  data = TP.train,
+                  method = "ranger",
+                  tuneLength = 18,
+                  importance = 'permutation',
+                  num.trees = 500,
+                  trControl = train.control)
+saveRDS(rangerMod, "loo_rangerMod_auto.rds")
+#=================================================================
+# 4. Neural Networks with Feature Extraction
+#=================================================================
+pcaNNetMod <- train(as.factor(subgroup) ~ ., 
+                  data = TP.train,
+                  method = "pcaNNet",
+                  tuneLength = 18,
+                  trControl = train.control, MaxNWts=1008)
+saveRDS(pcaNNetMod, "loo_pcaNNetMod_auto.rds")
+#=================================================================
+# 5. k-Nearset Neighbor
+#=================================================================
+knnMod <- train(as.factor(subgroup) ~ ., 
+                  data = TP.train,
+                  method = "knn",
+                  tuneLength = 18,
+                  trControl = train.control)
+saveRDS(knnMod, "loo_knnMod_auto.rds")
+
+#=================================================================
+# 6. XGBoost
+#=================================================================
+# Leverage a grid search of hyperparameters for xgboost. See 
+# the following presentation for more information:
+# https://www.slideshare.net/odsc/owen-zhangopen-sourcetoolsanddscompetitions1
+tune.grid_xgb <- expand.grid(eta = c(0.05, 0.075, 0.1),
+                        nrounds = c(50, 75, 100),
+                        max_depth = 6:8,
+                         min_child_weight = c(2.0, 2.25, 2.5),
+                         colsample_bytree = c(0.3, 0.4, 0.5),
+                         gamma = 0,
+                        subsample = 1)
+View(tune.grid_xgb) 
+xgbMod <- train(as.factor(subgroup) ~ .,    
+                  data = TP.train,
+                  method = "xgbTree",
+                  tuneLength = 18,
+                 trControl = train.control)
+saveRDS(xgbMod, "loo_xgbMod_auto.rds")
+```
+
+
+```{r}
+#=================================================================
+# Evaluate results
+#=================================================================
+sort(pcaNNetMod$results$Accuracy,decreasing=T) 
+sort(xgbMod$results$Accuracy,decreasing=T)  
+sort(knnMod$results$Accuracy,decreasing=T)  
+sort(enetMod$results$Accuracy,decreasing=T) 
+sort(svmMod$results$Accuracy,decreasing=T) 
+sort(rangerMod$results$Accuracy,decreasing=T) 
+```
+
+```{r}
+modelList = list("KNN" = knnMod,
+                 "ENET" = enetMod,
+                 "ranger" = rangerMod,
+                 "XGB" = xgbMod,
+                 "pcaNNet" = pcaNNetMod,
+                 "svm" = svmMod)
+allPreds <- sapply(modelList, predict, TP.test)
+as.matrix(allPreds)
+DF <- as.data.frame(allPreds)
+DF$actualValue <- TP.test[,1]
+
+
+#actualValue <- TP.test$subgroup
+confusionMatrix_svm=confusionMatrix(as.factor(DF$svm), as.factor(DF$actualValue), mode='prec_recall', positive = NULL, dnn = c("Prediction","Reference"))
+write.csv(confusionMatrix_svm$table, file="confusionMatrix_svm.csv")
+confusionMatrix_knn=confusionMatrix(as.factor(DF$KNN), as.factor(DF$actualValue), mode='prec_recall', positive = NULL, dnn = c("Prediction","Reference"))
+write.csv(confusionMatrix_knn$table, file="confusionMatrix_knn.csv")
+confusionMatrix_enet=confusionMatrix(as.factor(DF$ENET), as.factor(DF$actualValue), mode='prec_recall', positive = NULL, dnn = c("Prediction","Reference"))
+write.csv(confusionMatrix_enet$table, file="confusionMatrix_enet.csv")
+confusionMatrix_ranger=confusionMatrix(as.factor(DF$ranger), as.factor(DF$actualValue), mode='prec_recall', positive = NULL, dnn = c("Prediction","Reference"))
+write.csv(confusionMatrix_ranger$table, file="confusionMatrix_ranger.csv")
+confusionMatrix_xgb=confusionMatrix(as.factor(DF$XGB), as.factor(DF$actualValue), mode='prec_recall', positive = NULL, dnn = c("Prediction","Reference"))
+write.csv(confusionMatrix_xgb$table, file="confusionMatrix_xgb.csv")
+confusionMatrix_pcaNNet=confusionMatrix(as.factor(DF$pcaNNet), as.factor(DF$actualValue), mode='prec_recall', positive = NULL, dnn = c("Prediction","Reference"))
+write.csv(confusionMatrix_pcaNNet$table, file="confusionMatrix_pcaNNet.csv")
+
+confusionMatrix_svm$overall
+confusionMatrix_knn$overall
+confusionMatrix_enet$overall
+confusionMatrix_pcaNNet$overall 
+confusionMatrix_ranger$overall
+confusionMatrix_xgb$overall
+```
+
+```{r}
+getwd()
+xgb_imp <- varImp(xgbMod)
+xgb_imp$importance
+plot(xgb_imp)
+
+knn_imp <- varImp(knnMod)
+knn_imp$importance
+plot(knn_imp)
+
+enet_imp <- varImp(enetMod)
+enet = enet_imp$importance
+plot(enet_imp)
+
+ranger_imp <- varImp(rangerMod)
+ranger_imp$importance
+plot(ranger_imp)
+
+svm_imp <- varImp(svmMod)
+svm_imp$importance
+plot(svm_imp)
+
+pcaNNet_imp <- varImp(pcaNNetMod)
+pcaNNet_imp$importance
+plot(pcaNNet_imp)
+stopCluster(cl)
+
+pdf("xgb_varImp.pdf", width = 10, height = 30)
+ggplot(xgb_imp)+
+  theme_minimal()
+dev.off()
+pdf("enet_varImp.pdf", width = 10, height = 30)
+ggplot(enet_imp)+
+  theme_minimal()
+dev.off()
+pdf("ranger_varImp.pdf", width = 10, height = 30)
+ggplot(ranger_imp)+
+  theme_minimal()
+dev.off()
+pdf("svm_varImp.pdf", width = 10, height = 120)
+ggplot(svm_imp)+
+  theme_minimal()
+dev.off()
+pdf("pcaNNet_varImp.pdf", width = 10, height = 120)
+ggplot(pcaNNet_imp)+
+  theme_minimal()
+dev.off()
+
+library(MLeval)
+pdf("MLeval_enet.pdf")
+prediction <- predict(enetMod, newdata=TP.test, type ="prob")
+test_pred_prediction <- evalm(data.frame(prediction, as.factor(TP.test[,1])))
+dev.off()
+pdf("MLeval_pcaNNet.pdf")
+prediction <- predict(pcaNNetMod, newdata=TP.test, type ="prob")
+test_pred_prediction <- evalm(data.frame(prediction, as.factor(TP.test[,1])))
+dev.off()
+pdf("MLeval_ranger.pdf")
+prediction <- predict(rangerMod, newdata=TP.test, type ="prob")
+test_pred_prediction <- evalm(data.frame(prediction, as.factor(TP.test[,1])))
+dev.off()
+pdf("MLeval_svm.pdf")
+prediction <- predict(svmMod, newdata=TP.test, type ="prob")
+test_pred_prediction <- evalm(data.frame(prediction, as.factor(TP.test[,1])))
+dev.off()
+pdf("MLeval_xgb.pdf")
+prediction <- predict(xgbMod, newdata=TP.test, type ="prob")
+test_pred_prediction <- evalm(data.frame(prediction, as.factor(TP.test[,1])))
+dev.off()
+pdf("MLeval_knn.pdf")
+prediction <- predict(knnMod, newdata=TP.test, type ="prob")
+test_pred_prediction <- evalm(data.frame(prediction, as.factor(TP.test[,1])))
+dev.off()
+```

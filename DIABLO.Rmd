@@ -1,0 +1,195 @@
+
+```{r}
+#=======================================================================================
+# Author:      s.prastnielsen@gmail.com
+# Date:        2023-04-11
+# Omics integration using DIABLO
+#=======================================================================================
+library(mixOmics)
+library(doSNOW)
+library(knitr)
+library(zCompositions)
+library(chemometrics)
+library(MatchIt)
+library(mdatools)
+library(igraph)
+library(base)
+```
+```{r}
+olink2=read.csv("data.csv", sep=";", dec=",",row.names = 1)
+rownames(olink2) = paste0('Kolbi', rownames(olink2))
+olink1=olink2[-c(93:96)] #remove columns with comments
+
+taxa1=readRDS("taxa_clr.rds")
+colnames(taxa1)=gsub(".*s__","", colnames(taxa1))
+colnames(taxa1)=gsub(".Collinsella.","Collinsella", colnames(taxa1))
+colnames(taxa1)
+taxa0=taxa1
+colnames(taxa0)[1]<- "unknown_species"
+x=strsplit(colnames(taxa0), '_')
+genus=substr(colnames(taxa0), 1,1)
+colnames(taxa0)=paste0(genus,". ", sapply(x, "[",2),"_",sapply(x, "[",3),"_",sapply(x, "[",4),"_",sapply(x, "[",5))
+colnames(taxa0)=gsub("_NA","", colnames(taxa0))
+colnames(taxa0)[1]<- "unknown_species"
+colnames(taxa0)
+duplicated_names <- duplicated(colnames(taxa0))
+duplicated_names #col 168 and 296, E. massiliensis, col 193 has shorter original name: "Enorma_massiliensis"
+colnames(taxa1)
+colnames(taxa0)[296]<- "Enorma_massiliensis"
+rownames(taxa0) = paste0('Kolbi', rownames(taxa0))
+sort(colnames(taxa0))
+duplicated_names2 <- duplicated(colnames(taxa0))
+duplicated_names2
+meta1 <- read.csv2(file="metadata.csv", header=T, row.names = 1, sep=",")
+rownames(meta1) = paste0('Kolbi', rownames(meta1))
+
+extra1<- read.csv2(file="Extra_metadata_merge_20220331.csv", header=T, row.names = 1, sep=",")
+rownames(extra1) = paste0('Kolbi', rownames(extra1))
+str(meta1$Age)
+meta1$Age<-as.numeric(meta1$Age)
+meta1$IBD<-as.numeric(meta1$IBD)
+str(meta1$Age)
+str(meta1$IBD)
+extra_CD_CC=subset(extra1, extra1$UC==0)
+
+samples=read.csv("samples.csv")
+samples$snr = paste0('Kolbi', samples$snr)
+A=as.character(samples$snr)
+meta_CD_CC=meta1[A,]
+extra_CD_CC=extra1[A,]
+olink_CD_CC=olink1[A,]
+taxa=taxa0[A,]
+boxplot(meta_CD_CC$Age~meta_CD_CC$IBD)
+summary(meta_CD_CC$Age, un = FALSE)
+```
+                 meta$Clean.colon
+meta$Probiotika  0  1
+              0 73 74
+              1  5  2
+              very few took probiotics
+```{r}                    
+group0=extra1
+group=group0[rownames(taxa),]
+```
+
+```{r}
+# merge data and name each data frame
+X <- list( taxa = taxa, olink = olink)
+Y=as.factor(group$CD)
+summary(Y)
+```
+```{r}
+getwd()
+cl <- makeCluster(6, type = "SOCK")
+registerDoSNOW(cl)
+MyResult.diablo1 <- block.plsda(X, Y, ncomp=4)
+perf.diablo = perf(MyResult.diablo1, validation = 'loo', cpus=6)
+pdf(file="perf.diablo.pdf", width = 9, height = 6)
+plot(perf.diablo, col = color.mixo(5:7), sd = TRUE, legend.position = "horizontal")
+dev.off()
+pdf(file="plotIndiv.pdf", width = 9, height = 6)
+plotIndiv(MyResult.diablo1, ind.names=F, ellipse=T) ## sample plot
+dev.off
+#stopCluster(cl)
+plotIndiv(MyResult.diablo1, ind.names=F, ellipse=T)
+plot(perf.diablo, col = color.mixo(5:7), sd = TRUE, legend.position = "horizontal")
+```
+
+```{r}
+pls.res = mixOmics::pls(X$taxa,X$olink, ncomp = 1)
+cor(pls.res$variates$X, pls.res$variates$Y)
+```
+ 
+```{r}
+MyDesignPLSfull <- matrix(c(0, 0.54, 1,
+                            0.54, 0, 1,
+                            1,1,0),
+                   byrow=TRUE,
+                   ncol = 3, nrow = 3)
+colnames(MyDesignPLSfull) = c("taxa","olink","Y")
+rownames(MyDesignPLSfull) = c("taxa","olink", "Y")
+MyDesignPLSfull
+```
+
+```{r}
+MyResult.diabloPLSfull <- block.plsda(X, Y, ncomp=5, design=MyDesignPLSfull)
+perf.diabloPLSfull = perf(MyResult.diabloPLSfull, validation = 'loo', nrepeats=20, folds=50,dist='all', cpus=7)
+saveRDS(perf.diabloPLSfull, file="perf.diabloPLSfull.rds")
+pdf(file="plotperfPLSfull_loo.pdf")
+plot(perf.diabloPLSfull, col = color.mixo(5:7), sd = TRUE, legend.position = "horizontal")
+dev.off()
+```
+
+```{r}
+test.keepX = list (taxa = c(5:6, seq(8,38,3)), olink =  c(5:6, seq(8,38,3)))
+test.keepX$taxa
+test.keepX$olink
+t1 = proc.time()
+design = MyDesignPLSfull
+design 
+cl <- makeCluster(7, type = "SOCK")
+registerDoSNOW(cl)
+BPPARAM <- BiocParallel::MulticoreParam(workers = parallel::detectCores()-2)
+tune.BBMPLSfull = tune.block.splsda(X = X, Y = Y, ncomp = 3,test.keepX = test.keepX, design = design, validation = 'loo',nrepeats=20,folds=50,dist = "centroids.dist", BPPARAM=BPPARAM)
+list.keepX = tune.BBMPLSfull$choice.keepX
+list.keepX
+error=tune.BBMPLSfull$error.rate
+pdf(file="ALLncomp3_tune.BBMPLSfull_plot.pdf", width= 30, height = 30)
+plot(tune.BBMPLSfull, legend=T)
+dev.off()
+saveRDS(tune.BBMPLSfull, file = "ALLncomp3_tune.BBMPLSfull.rds")
+```
+
+```{r}
+test.keepX = list (taxa = c(5:20), olink =  c(5:20))
+test.keepX$taxa
+test.keepX$olink
+t1 = proc.time()
+design = MyDesignPLSfull
+design 
+cl <- makeCluster(7, type = "SOCK")
+registerDoSNOW(cl)
+BPPARAM <- BiocParallel::MulticoreParam(workers = parallel::detectCores()-2)
+tune.BBMPLSfull = tune.block.splsda(X = X, Y = Y, ncomp = 3,test.keepX = test.keepX, design = design, validation = 'loo',dist = "centroids.dist", BPPARAM=BPPARAM)
+list.keepX = tune.BBMPLSfull$choice.keepX
+list.keepX
+error=tune.BBMPLSfull$error.rate
+pdf(file="ALLncomp3_tune.BBMPLSfull_plot.pdf", width= 30, height = 30)
+plot(tune.BBMPLSfull, legend=T)
+dev.off()
+saveRDS(tune.BBMPLSfull, file = "ALLncomp3_tune.BBMPLSfull.rds")
+```
+
+```{r}
+MyResult.diablo_comp1 <- block.splsda(X, Y, keepX=list(taxa = c(17),olink = c(6)), ncomp=1, design = MyDesignPLSfull)
+getwd()
+pdf(file="230522weighted_circos40Plot_mpa3_clr_olink_comp1W24H23_NO_intralinks_for_pub.pdf", width = 24, height = 23)
+circosPlot(MyResult.diablo_comp1, cutoff=.4, line=T,
+size.labels = 0.02, size.legend=0.1, color.cor=c("purple3","hotpink"), color.blocks = c("yellow2", "grey70"), size.variables = 2.8, legend=T, linkWidth = c(0.5,20),showIntraLinks = F,var.adj = -0.33,block.labels.adj = 1)
+dev.off()
+
+pdf("AUC.pdf", height=4, width=6)
+auc.splsda <- auroc(MyResult.diablo)
+auc.splsda_comp1 <- auroc(MyResult.diablo_comp1)
+dev.off()
+```
+
+```{r}
+MyDesignPLS1 <- matrix(c(0, 1, 1,
+                            1, 0, 1,
+                            1,1,0),
+                   byrow=TRUE,
+                   ncol = 3, nrow = 3)
+colnames(MyDesignPLS1) = c("taxa","olink","Y")
+rownames(MyDesignPLS1) = c("taxa","olink","Y")
+MyDesignPLS1
+
+MyResult.diabloPLS1 <- block.plsda(X, Y, ncomp=4, design=MyDesignPLS1)
+perf.diabloPLS1 = perf(MyResult.diabloPLS1, validation = 'loo', dist='all', cpus=7)
+saveRDS(perf.diabloPLS1, file="perf.diabloPLS1.rds")
+pdf(file="plotperfPLS1_loo.pdf")
+plot(perf.diabloPLS1, col = color.mixo(5:7), sd = TRUE, legend.position = "horizontal")
+dev.off()
+```
+Performed worse. Keep the model from above.
+

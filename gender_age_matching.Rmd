@@ -1,0 +1,136 @@
+
+```{r}
+getwd()
+#=======================================================================================
+# Author:      s.prastnielsen@gmail.com
+# Date:        2023-04-11
+# Age and gender-matching UC vs CC
+#=======================================================================================
+library(MetBrewer) 
+library(tidyverse)
+library(readxl)
+library(vegan)
+library(ggplot2)
+library(ggpubr)
+library(grid)
+library(doSNOW)
+library(dplyr)
+library(cowplot)
+library(naniar)
+library(mdatools)
+library(MatchIt)
+library(e1071)
+sessionInfo()
+```
+
+```{r}
+group1=read.csv(file="Extra_metadata_merge_20220331.csv",header=T, row.names = 1)
+group0=subset(group1, group1$IBDvsCC3ABcohort==1)
+row_names_df_to_remove<-c("30105","20262","20139") #samples to exclude
+group=group0[!(row.names(group0) %in% row_names_df_to_remove),]
+rownames(group) = paste0('Kolbi', rownames(group))
+
+bile_acids0 = read.delim(file="bile_acids.csv", row.names = 10, header=T, sep=",")
+rownames(bile_acids0) = paste0('Kolbi', rownames(bile_acids0))
+B=intersect(rownames(bile_acids0), rownames(group)) #n=342
+bile_acids1=bile_acids0[B,]
+bile_acids2 = bile_acids1[-c(1:17)]
+bile_acids=prep.autoscale(bile_acids2, center = TRUE, scale = TRUE, max.cov = 1)
+boxplot(bile_acids, main = "Mean centered and standardized")
+
+groupB=group[B,]
+sum(groupB$UC==1) #n=86
+sum(groupB$CC==1) #n=165
+sum(groupB$CD==1) #n=88
+sum(groupB$AB3months==1) #n=0
+
+group_bile=group[B,] #n=339
+sum(group_bile$CC==1) #n=165
+sum(group_bile$UC==1) #n=86
+sum(group_bile$UC==1&group_bile$activeinflIBD==1) #n=21
+sum(group_bile$UC==1&group_bile$activeinflIBD==0) #n=65
+group_bile_UC_CC=subset(group_bile, group_bile$CD==0) #n=251
+
+olink2=read.csv("data.csv", sep=";", dec=",",row.names = 1)
+rownames(olink2) = paste0('Kolbi', rownames(olink2))
+olink1=olink2[-c(93:96)] #remove columns with comments
+
+B2=intersect(rownames(olink1), rownames(group)) #n=322
+groupB2=group[B2,]
+sum(groupB2$UC==1) #n=80
+sum(groupB2$CC==1) #n=163
+sum(groupB2$CD==1) #n=79
+sum(groupB2$AB3months==1) #n=0
+
+
+C=intersect(rownames(group_bile_UC_CC), rownames(olink1)) #n=239
+group_bile_olink_UC_CC=group_bile_UC_CC[C,]
+sum(group_bile_olink_UC_CC$UC==1) #n=78
+sum(group_bile_olink_UC_CC$CC==1) #n=161
+
+taxa00 = read.delim(file="final_mpa_profile_species_w_qc.csv", row.names = 1, header=T, sep=",")
+taxa0=taxa00[-c(1:7)]
+rownames(taxa0) = paste0('Kolbi', rownames(taxa0))
+B1=intersect(rownames(taxa0), rownames(group)) #n=322
+groupB1=group[B1,]
+sum(groupB1$UC==1) #n=75
+sum(groupB1$CC==1) #n=142
+sum(groupB1$CD==1) #n=90
+sum(groupB1$AB3months==1) #n=0
+
+E=intersect(rownames(group_bile_olink_UC_CC), rownames(taxa0))
+snr=read.csv("List_samples_with_bile_acid_olink_and_taxa_profiles.csv")
+snr$snr = paste0('Kolbi', snr$snr)
+G=snr$snr
+#D=E[G,]
+group_bile_olink_taxa_UC_CC=group_bile_olink_UC_CC[G,]
+sum(group_bile_olink_taxa_UC_CC$UC==1) #n=55
+sum(group_bile_olink_taxa_UC_CC$CC==1) #n=134
+
+meta1<- read.csv(file="/Users/stefanie.prast-nielsen/OneDrive - Karolinska Institutet/Mac/Documents_KI_SE/work/CTMR/projects/001_Kolbi/metadata/GOLDEN_SLUTFIL_220407.csv", row.names=2, header=T)
+meta_snr=meta1[G,]
+write.csv(meta_snr, "231004GOLDEN_110UC_CC_matched.csv")
+meta1$Age.at.colonoscopy..y.
+rownames(meta1) = paste0('Kolbi', rownames(meta1))
+str(meta1$Age)
+meta1$Age<-as.numeric(meta1$Age)
+meta1$BMI<-as.numeric(meta1$BMI)
+meta1$IBD<-as.numeric(meta1$IBD)
+str(meta1$Age)
+str(meta1$IBD)
+meta1$Gender.1.woman<-as.factor(meta1$Gender.1.woman)
+str(meta1$Gender.1.woman)
+meta_bile_olink_taxa_UC_CC=meta1[G,]
+plot(meta_bile_olink_taxa_UC_CC$Gender.1.woman~meta_bile_olink_taxa_UC_CC$IBD) 
+chi=chisq.test(meta_bile_olink_taxa_UC_CC$Gender.1.woman,meta_bile_olink_taxa_UC_CC$IBD)
+boxplot(meta_bile_olink_taxa_UC_CC$Age~meta_bile_olink_taxa_UC_CC$IBD)
+test=t.test(meta_bile_olink_taxa_UC_CC$Age~meta_bile_olink_taxa_UC_CC$IBD) 
+boxplot(meta_bile_olink_taxa_UC_CC$BMI~meta_bile_olink_taxa_UC_CC$IBD)
+test=t.test(meta_bile_olink_taxa_UC_CC$BMI~meta_bile_olink_taxa_UC_CC$IBD)
+```
+
+```{r}
+match.it_UC <- matchit(meta_bile_olink_taxa_UC_CC$IBD.diagnos~meta_bile_olink_taxa_UC_CC$Age+meta_bile_olink_taxa_UC_CC$Gender.1.woman, data = meta_bile_olink_taxa_UC_CC, method="nearest", ratio=1)
+summary(match.it_UC, un = FALSE)
+plot(match.it_UC, type = "jitter", interactive = FALSE)
+plot(match.it_UC, type = "qq", interactive = FALSE,
+     which.xs = c("meta_bile_olink_taxa_UC_CC$Age"))
+matched_UC_CC <- match.data(match.it_UC)
+boxplot(matched_UC_CC$Age~matched_UC_CC$IBD)
+test=t.test(matched_UC_CC$Age~matched_UC_CC$IBD)
+plot(matched_UC_CC$Gender.1.woman~matched_UC_CC$IBD) 
+chi=chisq.test(matched_UC_CC$Gender.1.woman,matched_UC_CC$IBD)
+```
+
+```{r}
+getwd()
+Matched=rownames(matched_UC_CC)
+final_group_age_and_gender_matched_UC_CC=group_bile_olink_taxa_UC_CC[Matched,]
+taxa_age_and_gender_matched_UC_CC=taxa0[Matched,]
+olink_age_and_gender_matched_UC_CC=olink1[Matched,]
+bile_age_and_gender_matched_UC_CC=bile_acids2[Matched,]
+write.csv(Matched, file="221109_List_of_age_and_gender_matched_UC_samples_with_bile_acid_olink_and_taxa_profiles_n110.csv")
+write.csv(taxa_age_and_gender_matched_UC_CC, "221109_taxa_age_and_gender_matched_UC_CC.csv")
+write.csv(olink_age_and_gender_matched_UC_CC, "221109_olink_age_and_gender_matched_UC_CC.csv")
+write.csv(bile_age_and_gender_matched_UC_CC, "221109_bile_age_and_gender_matched_UC_CC.csv")
+```
