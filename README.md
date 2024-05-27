@@ -1,0 +1,1 @@
+Here you can find the code needed to reproduce results from Prast-Nielsen et al. currently submitted for publication.![image](https://github.com/Steffi17/IBD/assets/16036985/a36dce0a-aeab-47c2-a3bd-e11b623bfb27)
